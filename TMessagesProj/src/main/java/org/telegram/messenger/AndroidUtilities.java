@@ -1,13 +1,16 @@
 /*
- * This is the source code of Telegram for Android v. 1.4.x.
+ * This is the source code of Telegram for Android v. 3.x.x.
  * It is licensed under GNU GPL v. 2 or later.
  * You should have received a copy of the license in this archive (see LICENSE).
  *
- * Copyright Nikolai Kudashov, 2013-2014.
+ * Copyright Nikolai Kudashov, 2013-2016.
  */
 
 package org.telegram.messenger;
 
+import android.animation.Animator;
+import android.animation.AnimatorSet;
+import android.animation.ObjectAnimator;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -16,19 +19,28 @@ import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.BitmapShader;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.Point;
 import android.graphics.Rect;
+import android.graphics.RectF;
+import android.graphics.Shader;
 import android.graphics.Typeface;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
 import android.provider.DocumentsContract;
 import android.provider.MediaStore;
-import android.text.Spannable;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
 import android.text.style.ForegroundColorSpan;
@@ -39,6 +51,7 @@ import android.view.Surface;
 import android.view.View;
 import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
+import android.webkit.MimeTypeMap;
 import android.widget.AbsListView;
 import android.widget.EdgeEffect;
 import android.widget.EditText;
@@ -52,10 +65,7 @@ import net.hockeyapp.android.UpdateManager;
 
 import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.tgnet.TLRPC;
-import org.telegram.messenger.AnimationCompat.AnimatorListenerAdapterProxy;
-import org.telegram.messenger.AnimationCompat.AnimatorSetProxy;
-import org.telegram.messenger.AnimationCompat.ObjectAnimatorProxy;
-import org.telegram.messenger.AnimationCompat.ViewProxy;
+import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.Components.ForegroundDetector;
 import org.telegram.ui.Components.NumberPicker;
 import org.telegram.ui.Components.TypefaceSpan;
@@ -74,13 +84,16 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.Hashtable;
 import java.util.Locale;
+import java.util.regex.Pattern;
 
 public class AndroidUtilities {
 
     private static final Hashtable<String, Typeface> typefaceCache = new Hashtable<>();
     private static int prevOrientation = -10;
     private static boolean waitingForSms = false;
+    private static boolean waitingForCall = false;
     private static final Object smsLock = new Object();
+    private static final Object callLock = new Object();
 
     public static int statusBarHeight = 0;
     public static float density = 1;
@@ -92,10 +105,136 @@ public class AndroidUtilities {
     private static Boolean isTablet = null;
     private static int adjustOwnerClassGuid = 0;
 
+    private static Paint roundPaint;
+    private static RectF bitmapRect;
+
+    public static Pattern WEB_URL = null;
+    static {
+        try {
+            final String GOOD_IRI_CHAR = "a-zA-Z0-9\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF";
+            final Pattern IP_ADDRESS = Pattern.compile(
+                    "((25[0-5]|2[0-4][0-9]|[0-1][0-9]{2}|[1-9][0-9]|[1-9])\\.(25[0-5]|2[0-4]"
+                            + "[0-9]|[0-1][0-9]{2}|[1-9][0-9]|[1-9]|0)\\.(25[0-5]|2[0-4][0-9]|[0-1]"
+                            + "[0-9]{2}|[1-9][0-9]|[1-9]|0)\\.(25[0-5]|2[0-4][0-9]|[0-1][0-9]{2}"
+                            + "|[1-9][0-9]|[0-9]))");
+            final String IRI = "[" + GOOD_IRI_CHAR + "]([" + GOOD_IRI_CHAR + "\\-]{0,61}[" + GOOD_IRI_CHAR + "]){0,1}";
+            final String GOOD_GTLD_CHAR = "a-zA-Z\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF";
+            final String GTLD = "[" + GOOD_GTLD_CHAR + "]{2,63}";
+            final String HOST_NAME = "(" + IRI + "\\.)+" + GTLD;
+            final Pattern DOMAIN_NAME = Pattern.compile("(" + HOST_NAME + "|" + IP_ADDRESS + ")");
+            WEB_URL = Pattern.compile(
+                    "((?:(http|https|Http|Https):\\/\\/(?:(?:[a-zA-Z0-9\\$\\-\\_\\.\\+\\!\\*\\'\\(\\)"
+                            + "\\,\\;\\?\\&\\=]|(?:\\%[a-fA-F0-9]{2})){1,64}(?:\\:(?:[a-zA-Z0-9\\$\\-\\_"
+                            + "\\.\\+\\!\\*\\'\\(\\)\\,\\;\\?\\&\\=]|(?:\\%[a-fA-F0-9]{2})){1,25})?\\@)?)?"
+                            + "(?:" + DOMAIN_NAME + ")"
+                            + "(?:\\:\\d{1,5})?)" // plus option port number
+                            + "(\\/(?:(?:[" + GOOD_IRI_CHAR + "\\;\\/\\?\\:\\@\\&\\=\\#\\~"  // plus option query params
+                            + "\\-\\.\\+\\!\\*\\'\\(\\)\\,\\_])|(?:\\%[a-fA-F0-9]{2}))*)?"
+                            + "(?:\\b|$)");
+        } catch (Exception e) {
+            FileLog.e("tmessages", e);
+        }
+    }
+
     static {
         density = ApplicationLoader.applicationContext.getResources().getDisplayMetrics().density;
         leftBaseline = isTablet() ? 80 : 72;
         checkDisplaySize();
+    }
+
+    public static int[] calcDrawableColor(Drawable drawable) {
+        int bitmapColor = 0xff000000;
+        int result[] = new int[2];
+        try {
+            if (drawable instanceof BitmapDrawable) {
+                Bitmap bitmap = ((BitmapDrawable) drawable).getBitmap();
+                if (bitmap != null) {
+                    Bitmap b = Bitmaps.createScaledBitmap(bitmap, 1, 1, true);
+                    if (b != null) {
+                        bitmapColor = b.getPixel(0, 0);
+                        b.recycle();
+                    }
+                }
+            } else if (drawable instanceof ColorDrawable) {
+                bitmapColor = ((ColorDrawable) drawable).getColor();
+            }
+        } catch (Exception e) {
+            FileLog.e("tmessages", e);
+        }
+
+        double[] hsv = rgbToHsv((bitmapColor >> 16) & 0xff, (bitmapColor >> 8) & 0xff, bitmapColor & 0xff);
+        hsv[1] = Math.min(1.0, hsv[1] + 0.05 + 0.1 * (1.0 - hsv[1]));
+        hsv[2] = Math.max(0, hsv[2] * 0.65);
+        int rgb[] = hsvToRgb(hsv[0], hsv[1], hsv[2]);
+        result[0] = Color.argb(0x66, rgb[0], rgb[1], rgb[2]);
+        result[1] = Color.argb(0x88, rgb[0], rgb[1], rgb[2]);
+        return result;
+    }
+
+    private static double[] rgbToHsv(int r, int g, int b) {
+        double rf = r / 255.0;
+        double gf = g / 255.0;
+        double bf = b / 255.0;
+        double max = (rf > gf && rf > bf) ? rf : (gf > bf) ? gf : bf;
+        double min = (rf < gf && rf < bf) ? rf : (gf < bf) ? gf : bf;
+        double h, s;
+        double d = max - min;
+        s = max == 0 ? 0 : d / max;
+        if (max == min) {
+            h = 0;
+        } else {
+            if (rf > gf && rf > bf) {
+                h = (gf - bf) / d + (gf < bf ? 6 : 0);
+            } else if (gf > bf) {
+                h = (bf - rf) / d + 2;
+            } else {
+                h = (rf - gf) / d + 4;
+            }
+            h /= 6;
+        }
+        return new double[]{h, s, max};
+    }
+
+    private static int[] hsvToRgb(double h, double s, double v) {
+        double r = 0, g = 0, b = 0;
+        double i = (int) Math.floor(h * 6);
+        double f = h * 6 - i;
+        double p = v * (1 - s);
+        double q = v * (1 - f * s);
+        double t = v * (1 - (1 - f) * s);
+        switch ((int) i % 6) {
+            case 0:
+                r = v;
+                g = t;
+                b = p;
+                break;
+            case 1:
+                r = q;
+                g = v;
+                b = p;
+                break;
+            case 2:
+                r = p;
+                g = v;
+                b = t;
+                break;
+            case 3:
+                r = p;
+                g = q;
+                b = v;
+                break;
+            case 4:
+                r = t;
+                g = p;
+                b = v;
+                break;
+            case 5:
+                r = v;
+                g = p;
+                b = q;
+                break;
+        }
+        return new int[]{(int) (r * 255), (int) (g * 255), (int) (b * 255)};
     }
 
     public static void requestAdjustResize(Activity activity, int classGuid) {
@@ -115,8 +254,51 @@ public class AndroidUtilities {
         }
     }
 
+    public static boolean isGoogleMapsInstalled(final BaseFragment fragment) {
+        try {
+            ApplicationLoader.applicationContext.getPackageManager().getApplicationInfo("com.google.android.apps.maps", 0);
+            return true;
+        } catch (PackageManager.NameNotFoundException e) {
+            if (fragment.getParentActivity() == null) {
+                return false;
+            }
+            AlertDialog.Builder builder = new AlertDialog.Builder(fragment.getParentActivity());
+            builder.setMessage("Install Google Maps?");
+            builder.setCancelable(true);
+            builder.setPositiveButton(LocaleController.getString("OK", R.string.OK), new DialogInterface.OnClickListener() {
+                @Override
+                public void onClick(DialogInterface dialogInterface, int i) {
+                    try {
+                        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=com.google.android.apps.maps"));
+                        fragment.getParentActivity().startActivityForResult(intent, 500);
+                    } catch (Exception e) {
+                        FileLog.e("tmessages", e);
+                    }
+                }
+            });
+            builder.setNegativeButton(LocaleController.getString("Cancel", R.string.Cancel), null);
+            fragment.showDialog(builder.create());
+            return false;
+        }
+    }
+
+    public static boolean isInternalUri(Uri uri) {
+        String pathString = uri.getPath();
+        if (pathString == null) {
+            return false;
+        }
+        while (true) {
+            String newPath = Utilities.readlink(pathString);
+            if (newPath == null || newPath.equals(pathString)) {
+                break;
+            }
+            pathString = newPath;
+        }
+        return pathString != null && pathString.toLowerCase().contains("/data/data/" + ApplicationLoader.applicationContext.getPackageName() + "/files");
+    }
+
     public static void lockOrientation(Activity activity) {
-        if (activity == null || prevOrientation != -10 || Build.VERSION.SDK_INT < 9) {
+        if (activity == null || prevOrientation != -10) {
             return;
         }
         try {
@@ -125,22 +307,16 @@ public class AndroidUtilities {
             if (manager != null && manager.getDefaultDisplay() != null) {
                 int rotation = manager.getDefaultDisplay().getRotation();
                 int orientation = activity.getResources().getConfiguration().orientation;
-                int SCREEN_ORIENTATION_REVERSE_LANDSCAPE = 8;
-                int SCREEN_ORIENTATION_REVERSE_PORTRAIT = 9;
-                if (Build.VERSION.SDK_INT < 9) {
-                    SCREEN_ORIENTATION_REVERSE_LANDSCAPE = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
-                    SCREEN_ORIENTATION_REVERSE_PORTRAIT = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;
-                }
 
                 if (rotation == Surface.ROTATION_270) {
                     if (orientation == Configuration.ORIENTATION_PORTRAIT) {
                         activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
                     } else {
-                        activity.setRequestedOrientation(SCREEN_ORIENTATION_REVERSE_LANDSCAPE);
+                        activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE);
                     }
                 } else if (rotation == Surface.ROTATION_90) {
                     if (orientation == Configuration.ORIENTATION_PORTRAIT) {
-                        activity.setRequestedOrientation(SCREEN_ORIENTATION_REVERSE_PORTRAIT);
+                        activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT);
                     } else {
                         activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
                     }
@@ -152,9 +328,9 @@ public class AndroidUtilities {
                     }
                 } else {
                     if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
-                        activity.setRequestedOrientation(SCREEN_ORIENTATION_REVERSE_LANDSCAPE);
+                        activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE);
                     } else {
-                        activity.setRequestedOrientation(SCREEN_ORIENTATION_REVERSE_PORTRAIT);
+                        activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT);
                     }
                 }
             }
@@ -164,7 +340,7 @@ public class AndroidUtilities {
     }
 
     public static void unlockOrientation(Activity activity) {
-        if (activity == null || Build.VERSION.SDK_INT < 9) {
+        if (activity == null) {
             return;
         }
         try {
@@ -206,31 +382,58 @@ public class AndroidUtilities {
         }
     }
 
+    public static boolean isWaitingForCall() {
+        boolean value;
+        synchronized (callLock) {
+            value = waitingForCall;
+        }
+        return value;
+    }
+
+    public static void setWaitingForCall(boolean value) {
+        synchronized (callLock) {
+            waitingForCall = value;
+        }
+    }
+
     public static void showKeyboard(View view) {
         if (view == null) {
             return;
         }
-        InputMethodManager inputManager = (InputMethodManager)view.getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
-        inputManager.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT);
+        try {
+            InputMethodManager inputManager = (InputMethodManager)view.getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+            inputManager.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT);
+        } catch (Exception e) {
+            FileLog.e("tmessages", e);
+        }
     }
 
     public static boolean isKeyboardShowed(View view) {
         if (view == null) {
             return false;
         }
-        InputMethodManager inputManager = (InputMethodManager) view.getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
-        return inputManager.isActive(view);
+        try {
+            InputMethodManager inputManager = (InputMethodManager) view.getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+            return inputManager.isActive(view);
+        } catch (Exception e) {
+            FileLog.e("tmessages", e);
+        }
+        return false;
     }
 
     public static void hideKeyboard(View view) {
         if (view == null) {
             return;
         }
-        InputMethodManager imm = (InputMethodManager) view.getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
-        if (!imm.isActive()) {
-            return;
+        try {
+            InputMethodManager imm = (InputMethodManager) view.getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (!imm.isActive()) {
+                return;
+            }
+            imm.hideSoftInputFromWindow(view.getWindowToken(), 0);
+        } catch (Exception e) {
+            FileLog.e("tmessages", e);
         }
-        imm.hideSoftInputFromWindow(view.getWindowToken(), 0);
     }
 
     public static File getCacheDir() {
@@ -265,7 +468,7 @@ public class AndroidUtilities {
         if (value == 0) {
             return 0;
         }
-        return (int)Math.ceil(density * value);
+        return (int) Math.ceil(density * value);
     }
 
     public static int compare(int lhs, int rhs) {
@@ -293,49 +496,13 @@ public class AndroidUtilities {
                 Display display = manager.getDefaultDisplay();
                 if (display != null) {
                     display.getMetrics(displayMetrics);
-                    if (android.os.Build.VERSION.SDK_INT < 13) {
-                        displaySize.set(display.getWidth(), display.getHeight());
-                    } else {
-                        display.getSize(displaySize);
-                    }
+                    display.getSize(displaySize);
                     FileLog.e("tmessages", "display size = " + displaySize.x + " " + displaySize.y + " " + displayMetrics.xdpi + "x" + displayMetrics.ydpi);
                 }
             }
         } catch (Exception e) {
             FileLog.e("tmessages", e);
         }
-
-        /*
-        keyboardHidden
-        public static final int KEYBOARDHIDDEN_NO = 1
-        Constant for keyboardHidden, value corresponding to the keysexposed resource qualifier.
-
-        public static final int KEYBOARDHIDDEN_UNDEFINED = 0
-        Constant for keyboardHidden: a value indicating that no value has been set.
-
-        public static final int KEYBOARDHIDDEN_YES = 2
-        Constant for keyboardHidden, value corresponding to the keyshidden resource qualifier.
-
-        hardKeyboardHidden
-        public static final int HARDKEYBOARDHIDDEN_NO = 1
-        Constant for hardKeyboardHidden, value corresponding to the physical keyboard being exposed.
-
-        public static final int HARDKEYBOARDHIDDEN_UNDEFINED = 0
-        Constant for hardKeyboardHidden: a value indicating that no value has been set.
-
-        public static final int HARDKEYBOARDHIDDEN_YES = 2
-        Constant for hardKeyboardHidden, value corresponding to the physical keyboard being hidden.
-
-        keyboard
-        public static final int KEYBOARD_12KEY = 3
-        Constant for keyboard, value corresponding to the 12key resource qualifier.
-
-        public static final int KEYBOARD_NOKEYS = 1
-        Constant for keyboard, value corresponding to the nokeys resource qualifier.
-
-        public static final int KEYBOARD_QWERTY = 2
-        Constant for keyboard, value corresponding to the qwerty resource qualifier.
-         */
     }
 
     public static float getPixelsInCM(float cm, boolean isX) {
@@ -510,7 +677,7 @@ public class AndroidUtilities {
     }
 
     public static void clearCursorDrawable(EditText editText) {
-        if (editText == null || Build.VERSION.SDK_INT < 12) {
+        if (editText == null) {
             return;
         }
         try {
@@ -535,8 +702,139 @@ public class AndroidUtilities {
         }
     }
 
+    private static Intent createShortcutIntent(long did, boolean forDelete) {
+        Intent shortcutIntent = new Intent(ApplicationLoader.applicationContext, OpenChatReceiver.class);
+
+        int lower_id = (int) did;
+        int high_id = (int) (did >> 32);
+
+        TLRPC.User user = null;
+        TLRPC.Chat chat = null;
+        if (lower_id == 0) {
+            shortcutIntent.putExtra("encId", high_id);
+            TLRPC.EncryptedChat encryptedChat = MessagesController.getInstance().getEncryptedChat(high_id);
+            if (encryptedChat == null) {
+                return null;
+            }
+            user = MessagesController.getInstance().getUser(encryptedChat.user_id);
+        } else if (lower_id > 0) {
+            shortcutIntent.putExtra("userId", lower_id);
+            user = MessagesController.getInstance().getUser(lower_id);
+        } else if (lower_id < 0) {
+            chat = MessagesController.getInstance().getChat(-lower_id);
+            shortcutIntent.putExtra("chatId", -lower_id);
+        } else {
+            return null;
+        }
+        if (user == null && chat == null) {
+            return null;
+        }
+
+        String name;
+        TLRPC.FileLocation photo = null;
+
+        if (user != null) {
+            name = ContactsController.formatName(user.first_name, user.last_name);
+            if (user.photo != null) {
+                photo = user.photo.photo_small;
+            }
+        } else {
+            name = chat.title;
+            if (chat.photo != null) {
+                photo = chat.photo.photo_small;
+            }
+        }
+
+        shortcutIntent.setAction("com.tmessages.openchat" + did);
+        shortcutIntent.addFlags(0x4000000);
+
+        Intent addIntent = new Intent();
+        addIntent.putExtra(Intent.EXTRA_SHORTCUT_INTENT, shortcutIntent);
+        addIntent.putExtra(Intent.EXTRA_SHORTCUT_NAME, name);
+        addIntent.putExtra("duplicate", false);
+        if (!forDelete) {
+            Bitmap bitmap = null;
+            if (photo != null) {
+                try {
+                    File path = FileLoader.getPathToAttach(photo, true);
+                    bitmap = BitmapFactory.decodeFile(path.toString());
+                    if (bitmap != null) {
+                        int size = AndroidUtilities.dp(58);
+                        Bitmap result = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+                        result.eraseColor(Color.TRANSPARENT);
+                        Canvas canvas = new Canvas(result);
+                        BitmapShader shader = new BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP);
+                        if (roundPaint == null) {
+                            roundPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                            bitmapRect = new RectF();
+                        }
+                        float scale = size / (float) bitmap.getWidth();
+                        canvas.save();
+                        canvas.scale(scale, scale);
+                        roundPaint.setShader(shader);
+                        bitmapRect.set(0, 0, bitmap.getWidth(), bitmap.getHeight());
+                        canvas.drawRoundRect(bitmapRect, bitmap.getWidth(), bitmap.getHeight(), roundPaint);
+                        canvas.restore();
+                        Drawable drawable = ApplicationLoader.applicationContext.getResources().getDrawable(R.drawable.book_logo);
+                        int w = AndroidUtilities.dp(15);
+                        int left = size - w - AndroidUtilities.dp(2);
+                        int top = size - w - AndroidUtilities.dp(2);
+                        drawable.setBounds(left, top, left + w, top + w);
+                        drawable.draw(canvas);
+                        try {
+                            canvas.setBitmap(null);
+                        } catch (Exception e) {
+                            //don't promt, this will crash on 2.x
+                        }
+                        bitmap = result;
+                    }
+                } catch (Throwable e) {
+                    FileLog.e("tmessages", e);
+                }
+            }
+            if (bitmap != null) {
+                addIntent.putExtra(Intent.EXTRA_SHORTCUT_ICON, bitmap);
+            } else {
+                if (user != null) {
+                    if (user.bot) {
+                        addIntent.putExtra(Intent.EXTRA_SHORTCUT_ICON_RESOURCE, Intent.ShortcutIconResource.fromContext(ApplicationLoader.applicationContext, R.drawable.book_bot));
+                    } else {
+                        addIntent.putExtra(Intent.EXTRA_SHORTCUT_ICON_RESOURCE, Intent.ShortcutIconResource.fromContext(ApplicationLoader.applicationContext, R.drawable.book_user));
+                    }
+                } else if (chat != null) {
+                    if (ChatObject.isChannel(chat) && !chat.megagroup) {
+                        addIntent.putExtra(Intent.EXTRA_SHORTCUT_ICON_RESOURCE, Intent.ShortcutIconResource.fromContext(ApplicationLoader.applicationContext, R.drawable.book_channel));
+                    } else {
+                        addIntent.putExtra(Intent.EXTRA_SHORTCUT_ICON_RESOURCE, Intent.ShortcutIconResource.fromContext(ApplicationLoader.applicationContext, R.drawable.book_group));
+                    }
+                }
+            }
+        }
+        return addIntent;
+    }
+
+    public static void installShortcut(long did) {
+        try {
+            Intent addIntent = createShortcutIntent(did, false);
+            addIntent.setAction("com.android.launcher.action.INSTALL_SHORTCUT");
+            ApplicationLoader.applicationContext.sendBroadcast(addIntent);
+        } catch (Exception e) {
+            FileLog.e("tmessages", e);
+        }
+    }
+
+    public static void uninstallShortcut(long did) {
+        try {
+            Intent addIntent = createShortcutIntent(did, true);
+            addIntent.setAction("com.android.launcher.action.UNINSTALL_SHORTCUT");
+            ApplicationLoader.applicationContext.sendBroadcast(addIntent);
+        } catch (Exception e) {
+            FileLog.e("tmessages", e);
+        }
+    }
+
     public static int getViewInset(View view) {
-        if (view == null || Build.VERSION.SDK_INT < 21) {
+        if (view == null || Build.VERSION.SDK_INT < 21 || view.getHeight() == AndroidUtilities.displaySize.y || view.getHeight() == AndroidUtilities.displaySize.y - statusBarHeight) {
             return 0;
         }
         try {
@@ -575,6 +873,19 @@ public class AndroidUtilities {
             FileLog.e("tmessages", e);
         }
         return size;
+    }
+
+    public static CharSequence getTrimmedString(CharSequence src) {
+        if (src == null || src.length() == 0) {
+            return src;
+        }
+        while (src.length() > 0 && (src.charAt(0) == '\n' || src.charAt(0) == ' ')) {
+            src = src.subSequence(1, src.length());
+        }
+        while (src.length() > 0 && (src.charAt(src.length() - 1) == '\n' || src.charAt(src.length() - 1) == ' ')) {
+            src = src.subSequence(0, src.length() - 1);
+        }
+        return src;
     }
 
     public static void setListViewEdgeEffectColor(AbsListView listView, int color) {
@@ -624,11 +935,11 @@ public class AndroidUtilities {
     public static final int FLAG_TAG_COLOR = 4;
     public static final int FLAG_TAG_ALL = FLAG_TAG_BR | FLAG_TAG_BOLD | FLAG_TAG_COLOR;
 
-    public static Spannable replaceTags(String str) {
+    public static SpannableStringBuilder replaceTags(String str) {
         return replaceTags(str, FLAG_TAG_ALL);
     }
 
-    public static Spannable replaceTags(String str, int flag) {
+    public static SpannableStringBuilder replaceTags(String str, int flag) {
         try {
             int start;
             int end;
@@ -683,14 +994,9 @@ public class AndroidUtilities {
     }
 
     public static boolean needShowPasscode(boolean reset) {
-        boolean wasInBackground;
-        if (Build.VERSION.SDK_INT >= 14) {
-            wasInBackground = ForegroundDetector.getInstance().isWasInBackground(reset);
-            if (reset) {
-                ForegroundDetector.getInstance().resetBackgroundVar();
-            }
-        } else {
-            wasInBackground = UserConfig.lastPauseTime != 0;
+        boolean wasInBackground = ForegroundDetector.getInstance().isWasInBackground(reset);
+        if (reset) {
+            ForegroundDetector.getInstance().resetBackgroundVar();
         }
         return UserConfig.passcodeHash.length() > 0 && wasInBackground &&
                 (UserConfig.appLocked || UserConfig.autoLockIn != 0 && UserConfig.lastPauseTime != 0 && !UserConfig.appLocked && (UserConfig.lastPauseTime + UserConfig.autoLockIn) <= ConnectionsManager.getInstance().getCurrentTime());
@@ -698,23 +1004,20 @@ public class AndroidUtilities {
 
     public static void shakeView(final View view, final float x, final int num) {
         if (num == 6) {
-            ViewProxy.setTranslationX(view, 0);
-            view.clearAnimation();
+            view.setTranslationX(0);
             return;
         }
-        AnimatorSetProxy animatorSetProxy = new AnimatorSetProxy();
-        animatorSetProxy.playTogether(ObjectAnimatorProxy.ofFloat(view, "translationX", AndroidUtilities.dp(x)));
-        animatorSetProxy.setDuration(50);
-        animatorSetProxy.addListener(new AnimatorListenerAdapterProxy() {
+        AnimatorSet animatorSet = new AnimatorSet();
+        animatorSet.playTogether(ObjectAnimator.ofFloat(view, "translationX", AndroidUtilities.dp(x)));
+        animatorSet.setDuration(50);
+        animatorSet.addListener(new AnimatorListenerAdapterProxy() {
             @Override
-            public void onAnimationEnd(Object animation) {
+            public void onAnimationEnd(Animator animation) {
                 shakeView(view, num == 5 ? 0 : -x, num + 1);
             }
         });
-        animatorSetProxy.start();
+        animatorSet.start();
     }
-
-
 
     /*public static String ellipsize(String text, int maxLines, int maxWidth, TextPaint paint) {
         if (text == null || paint == null) {
@@ -752,7 +1055,7 @@ public class AndroidUtilities {
     }*/
 
     /*public static void turnOffHardwareAcceleration(Window window) {
-        if (window == null || Build.MODEL == null || Build.VERSION.SDK_INT < 11) {
+        if (window == null || Build.MODEL == null) {
             return;
         }
         if (Build.MODEL.contains("GT-S5301") ||
@@ -766,7 +1069,7 @@ public class AndroidUtilities {
     }*/
 
     public static void checkForCrashes(Activity context) {
-        CrashManager.register(context, BuildVars.HOCKEY_APP_HASH, new CrashManagerListener() {
+        CrashManager.register(context, BuildVars.DEBUG_VERSION ? BuildVars.HOCKEY_APP_HASH_DEBUG : BuildVars.HOCKEY_APP_HASH, new CrashManagerListener() {
             @Override
             public boolean includeDeviceData() {
                 return true;
@@ -776,13 +1079,23 @@ public class AndroidUtilities {
 
     public static void checkForUpdates(Activity context) {
         if (BuildVars.DEBUG_VERSION) {
-            UpdateManager.register(context, BuildVars.HOCKEY_APP_HASH);
+            UpdateManager.register(context, BuildVars.DEBUG_VERSION ? BuildVars.HOCKEY_APP_HASH_DEBUG : BuildVars.HOCKEY_APP_HASH);
         }
     }
 
     public static void unregisterUpdates() {
         if (BuildVars.DEBUG_VERSION) {
             UpdateManager.unregister();
+        }
+    }
+
+    public static void addToClipboard(CharSequence str) {
+        try {
+            android.content.ClipboardManager clipboard = (android.content.ClipboardManager) ApplicationLoader.applicationContext.getSystemService(Context.CLIPBOARD_SERVICE);
+            android.content.ClipData clip = android.content.ClipData.newPlainText("label", str);
+            clipboard.setPrimaryClip(clip);
+        } catch (Exception e) {
+            FileLog.e("tmessages", e);
         }
     }
 
@@ -799,12 +1112,19 @@ public class AndroidUtilities {
         if (uri == null) {
             return;
         }
-        Intent mediaScanIntent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
-        mediaScanIntent.setData(uri);
-        ApplicationLoader.applicationContext.sendBroadcast(mediaScanIntent);
+        try {
+            Intent mediaScanIntent = new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
+            mediaScanIntent.setData(uri);
+            ApplicationLoader.applicationContext.sendBroadcast(mediaScanIntent);
+        } catch (Exception e) {
+            FileLog.e("tmessages", e);
+        }
     }
 
     private static File getAlbumDir() {
+        if (Build.VERSION.SDK_INT >= 23 && ApplicationLoader.applicationContext.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            return FileLoader.getInstance().getDirectory(FileLoader.MEDIA_DIR_CACHE);
+        }
         File storageDir = null;
         if (Environment.MEDIA_MOUNTED.equals(Environment.getExternalStorageState())) {
             storageDir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "Telegram");
@@ -885,7 +1205,11 @@ public class AndroidUtilities {
             cursor = context.getContentResolver().query(uri, projection, selection, selectionArgs, null);
             if (cursor != null && cursor.moveToFirst()) {
                 final int column_index = cursor.getColumnIndexOrThrow(column);
-                return cursor.getString(column_index);
+                String value = cursor.getString(column_index);
+                if (value.startsWith("content://") || !value.startsWith("/") && !value.startsWith("file://")) {
+                    return null;
+                }
+                return value;
             }
         } catch (Exception e) {
             FileLog.e("tmessages", e);
@@ -1049,5 +1373,58 @@ public class AndroidUtilities {
             }
         }
         return true;
+    }
+
+    public static byte[] calcAuthKeyHash(byte[] auth_key) {
+        byte[] sha1 = Utilities.computeSHA1(auth_key);
+        byte[] key_hash = new byte[16];
+        System.arraycopy(sha1, 0, key_hash, 0, 16);
+        return key_hash;
+    }
+
+    public static void openForView(MessageObject message, Activity activity) throws Exception {
+        File f = null;
+        String fileName = message.getFileName();
+        if (message.messageOwner.attachPath != null && message.messageOwner.attachPath.length() != 0) {
+            f = new File(message.messageOwner.attachPath);
+        }
+        if (f == null || !f.exists()) {
+            f = FileLoader.getPathToMessage(message.messageOwner);
+        }
+        if (f != null && f.exists()) {
+            String realMimeType = null;
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            MimeTypeMap myMime = MimeTypeMap.getSingleton();
+            int idx = fileName.lastIndexOf('.');
+            if (idx != -1) {
+                String ext = fileName.substring(idx + 1);
+                realMimeType = myMime.getMimeTypeFromExtension(ext.toLowerCase());
+                if (realMimeType == null) {
+                    if (message.type == 9 || message.type == 0) {
+                        realMimeType = message.getDocument().mime_type;
+                    }
+                    if (realMimeType == null || realMimeType.length() == 0) {
+                        realMimeType = null;
+                    }
+                }
+                if (realMimeType != null) {
+                    intent.setDataAndType(Uri.fromFile(f), realMimeType);
+                } else {
+                    intent.setDataAndType(Uri.fromFile(f), "text/plain");
+                }
+            } else {
+                intent.setDataAndType(Uri.fromFile(f), "text/plain");
+            }
+            if (realMimeType != null) {
+                try {
+                    activity.startActivityForResult(intent, 500);
+                } catch (Exception e) {
+                    intent.setDataAndType(Uri.fromFile(f), "text/plain");
+                    activity.startActivityForResult(intent, 500);
+                }
+            } else {
+                activity.startActivityForResult(intent, 500);
+            }
+        }
     }
 }

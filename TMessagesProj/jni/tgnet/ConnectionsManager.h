@@ -14,6 +14,7 @@
 #include <functional>
 #include <sys/epoll.h>
 #include <map>
+#include <atomic>
 #include <bits/unique_ptr.h>
 #include "Defines.h"
 
@@ -59,11 +60,11 @@ public:
     void pauseNetwork();
     void setNetworkAvailable(bool value);
     void setUseIpv6(bool value);
-    void init(uint32_t version, int32_t layer, int32_t apiId, std::string deviceModel, std::string systemVersion, std::string appVersion, std::string langCode, std::string configPath, int32_t userId, bool isPaused);
+    void init(uint32_t version, int32_t layer, int32_t apiId, std::string deviceModel, std::string systemVersion, std::string appVersion, std::string langCode, std::string configPath, std::string logPath, int32_t userId, bool isPaused, bool enablePushConnection);
     void updateDcSettings(uint32_t datacenterId);
+    void setPushConnectionEnabled(bool value);
 
 #ifdef ANDROID
-    int32_t sendRequest(TLObject *object, onCompleteFunc onComplete, onQuickAckFunc onQuickAck, uint32_t flags, uint32_t datacenterId, ConnectionType connetionType, bool immediate, jobject ptr1, jobject ptr2);
     void sendRequest(TLObject *object, onCompleteFunc onComplete, onQuickAckFunc onQuickAck, uint32_t flags, uint32_t datacenterId, ConnectionType connetionType, bool immediate, int32_t requestToken, jobject ptr1, jobject ptr2);
     static void useJavaVM(JavaVM *vm, bool useJavaByteBuffers);
 #endif
@@ -120,7 +121,7 @@ private:
     std::map<int32_t, std::vector<std::int32_t>> quickAckIdToRequestIds;
     int32_t pingTime;
     bool testBackend = false;
-    volatile uint32_t lastRequestToken = 1;
+    std::atomic<uint32_t> lastRequestToken{1};
     uint32_t currentDatacenterId = 0;
     uint32_t movingToDatacenterId = DEFAULT_DATACENTER_ID;
     int64_t pushSessionId = 0;
@@ -133,7 +134,7 @@ private:
     int32_t lastDcUpdateTime = 0;
     int64_t lastPingTime = getCurrentTimeMillis();
     bool networkPaused = false;
-    int32_t nextSleepTimeout = 30000;
+    int32_t nextSleepTimeout = CONNECTION_BACKGROUND_KEEP_TIME;
     int64_t lastPauseTime = 0;
     ConnectionState connectionState = ConnectionStateConnecting;
     std::unique_ptr<ByteArray> movingAuthorization;
@@ -169,8 +170,10 @@ private:
     std::string currentAppVersion;
     std::string currentLangCode;
     std::string currentConfigPath;
+    std::string currentLogPath;
     int32_t currentUserId = 0;
     bool registeredForInternalPush = false;
+    bool pushConnectionEnabled = true;
 
     ConnectiosManagerDelegate *delegate;
 

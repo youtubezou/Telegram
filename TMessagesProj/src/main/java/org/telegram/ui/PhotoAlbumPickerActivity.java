@@ -3,7 +3,7 @@
  * It is licensed under GNU GPL v. 2 or later.
  * You should have received a copy of the license in this archive (see LICENSE).
  *
- * Copyright Nikolai Kudashov, 2013-2014.
+ * Copyright Nikolai Kudashov, 2013-2016.
  */
 
 package org.telegram.ui;
@@ -37,6 +37,7 @@ import org.telegram.ui.ActionBar.ActionBar;
 import org.telegram.ui.ActionBar.ActionBarMenu;
 import org.telegram.ui.ActionBar.ActionBarMenuItem;
 import org.telegram.ui.ActionBar.BaseFragment;
+import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.Adapters.BaseFragmentAdapter;
 import org.telegram.ui.Cells.PhotoPickerAlbumsCell;
 import org.telegram.ui.Cells.PhotoPickerSearchCell;
@@ -72,8 +73,9 @@ public class PhotoAlbumPickerActivity extends BaseFragment implements Notificati
     private TextView dropDown;
     private ActionBarMenuItem dropDownContainer;
     private PickerBottomLayout pickerBottomLayout;
-    private boolean sendPressed = false;
-    private boolean singlePhoto = false;
+    private boolean sendPressed;
+    private boolean singlePhoto;
+    private boolean allowGifs;
     private int selectedMode;
     private ChatActivity chatActivity;
 
@@ -82,10 +84,11 @@ public class PhotoAlbumPickerActivity extends BaseFragment implements Notificati
     private final static int item_photos = 2;
     private final static int item_video = 3;
 
-    public PhotoAlbumPickerActivity(boolean singlePhoto, ChatActivity chatActivity) {
+    public PhotoAlbumPickerActivity(boolean singlePhoto, boolean allowGifs, ChatActivity chatActivity) {
         super();
         this.chatActivity = chatActivity;
         this.singlePhoto = singlePhoto;
+        this.allowGifs = allowGifs;
     }
 
     @Override
@@ -109,18 +112,13 @@ public class PhotoAlbumPickerActivity extends BaseFragment implements Notificati
     @SuppressWarnings("unchecked")
     @Override
     public View createView(Context context) {
-        actionBar.setBackgroundColor(0xff333333);
-        actionBar.setItemsBackground(R.drawable.bar_selector_picker);
+        actionBar.setBackgroundColor(Theme.ACTION_BAR_MEDIA_PICKER_COLOR);
+        actionBar.setItemsBackgroundColor(Theme.ACTION_BAR_PICKER_SELECTOR_COLOR);
         actionBar.setBackButtonImage(R.drawable.ic_ab_back);
         actionBar.setActionBarMenuOnItemClick(new ActionBar.ActionBarMenuOnItemClick() {
             @Override
             public void onItemClick(int id) {
                 if (id == -1) {
-                    if (Build.VERSION.SDK_INT < 11) {
-                        listView.setAdapter(null);
-                        listView = null;
-                        listAdapter = null;
-                    }
                     finishFragment();
                 } else if (id == 1) {
                     if (delegate != null) {
@@ -158,7 +156,7 @@ public class PhotoAlbumPickerActivity extends BaseFragment implements Notificati
         if (!singlePhoto) {
             selectedMode = 0;
 
-            dropDownContainer = new ActionBarMenuItem(context, menu, R.drawable.bar_selector_picker);
+            dropDownContainer = new ActionBarMenuItem(context, menu, 0);
             dropDownContainer.setSubMenuOpenSide(1);
             dropDownContainer.addSubItem(item_photos, LocaleController.getString("PickerPhotos", R.string.PickerPhotos), 0);
             dropDownContainer.addSubItem(item_video, LocaleController.getString("PickerVideo", R.string.PickerVideo), 0);
@@ -581,7 +579,7 @@ public class PhotoAlbumPickerActivity extends BaseFragment implements Notificati
                 photoPickerAlbumsCell.requestLayout();
             } else if (type == 1) {
                 if (view == null) {
-                    view = new PhotoPickerSearchCell(mContext);
+                    view = new PhotoPickerSearchCell(mContext, allowGifs);
                     ((PhotoPickerSearchCell) view).setDelegate(new PhotoPickerSearchCell.PhotoPickerSearchCellDelegate() {
                         @Override
                         public void didPressedSearchButton(int index) {

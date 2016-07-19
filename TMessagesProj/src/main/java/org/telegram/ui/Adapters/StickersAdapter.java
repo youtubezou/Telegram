@@ -3,16 +3,20 @@
  * It is licensed under GNU GPL v. 2 or later.
  * You should have received a copy of the license in this archive (see LICENSE).
  *
- * Copyright Nikolai Kudashov, 2013-2014.
+ * Copyright Nikolai Kudashov, 2013-2016.
  */
 
 package org.telegram.ui.Adapters;
 
+import android.app.Activity;
 import android.content.Context;
+import android.text.TextUtils;
 import android.view.View;
 import android.view.ViewGroup;
 
+import org.telegram.messenger.FileLog;
 import org.telegram.messenger.NotificationCenter;
+import org.telegram.messenger.Utilities;
 import org.telegram.messenger.query.StickersQuery;
 import org.telegram.messenger.support.widget.RecyclerView;
 import org.telegram.messenger.FileLoader;
@@ -21,6 +25,8 @@ import org.telegram.ui.Cells.StickerCell;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 
 public class StickersAdapter extends RecyclerView.Adapter implements NotificationCenter.NotificationCenterDelegate {
@@ -31,6 +37,8 @@ public class StickersAdapter extends RecyclerView.Adapter implements Notificatio
     private StickersAdapterDelegate delegate;
     private String lastSticker;
     private boolean visible;
+    private ArrayList<Long> newRecentStickers = new ArrayList<>();
+    private long recentLoadDate;
 
     public interface StickersAdapterDelegate {
         void needChangePanelVisibility(boolean show);
@@ -87,8 +95,18 @@ public class StickersAdapter extends RecyclerView.Adapter implements Notificatio
     }
 
     public void loadStikersForEmoji(CharSequence emoji) {
-        boolean search = emoji != null && emoji.length() > 0 && emoji.length() <= 4;
+        boolean search = emoji != null && emoji.length() > 0 && emoji.length() <= 14;
         if (search) {
+            int length = emoji.length();
+            for (int a = 0; a < length; a++) {
+                if (a < length - 1 && emoji.charAt(a) == 0xD83C && emoji.charAt(a + 1) >= 0xDFFB && emoji.charAt(a + 1) <= 0xDFFF) {
+                    emoji = TextUtils.concat(emoji.subSequence(0, a), emoji.subSequence(a + 2, emoji.length()));
+                    break;
+                } else if (emoji.charAt(a) == 0xfe0f) {
+                    emoji = TextUtils.concat(emoji.subSequence(0, a), emoji.subSequence(a + 1, emoji.length()));
+                    length--;
+                }
+            }
             lastSticker = emoji.toString();
             HashMap<String, ArrayList<TLRPC.Document>> allStickers = StickersQuery.getAllStickers();
             if (allStickers != null) {
@@ -99,7 +117,42 @@ public class StickersAdapter extends RecyclerView.Adapter implements Notificatio
                         visible = false;
                     }
                 } else {
-                    stickers = newStickers;
+                    stickers = newStickers != null && !newStickers.isEmpty() ? new ArrayList<>(newStickers) : null;
+                    if (stickers != null) {
+                        if (Math.abs(recentLoadDate - System.currentTimeMillis()) > 10 * 1000) {
+                            recentLoadDate = System.currentTimeMillis();
+                            try {
+                                String str = mContext.getSharedPreferences("emoji", Activity.MODE_PRIVATE).getString("stickers2", "");
+                                String[] args = str.split(",");
+                                for (int a = 0; a < args.length; a++) {
+                                    if (args[a].length() == 0) {
+                                        continue;
+                                    }
+                                    long id = Utilities.parseLong(args[a]);
+                                    if (id != 0) {
+                                        newRecentStickers.add(id);
+                                    }
+                                }
+                            } catch (Exception e) {
+                                FileLog.e("tmessages", e);
+                            }
+                        }
+                        if (!newRecentStickers.isEmpty()) {
+                            Collections.sort(stickers, new Comparator<TLRPC.Document>() {
+                                @Override
+                                public int compare(TLRPC.Document lhs, TLRPC.Document rhs) {
+                                    int idx1 = newRecentStickers.indexOf(lhs.id);
+                                    int idx2 = newRecentStickers.indexOf(rhs.id);
+                                    if (idx1 > idx2) {
+                                        return -1;
+                                    } else if (idx1 < idx2) {
+                                        return 1;
+                                    }
+                                    return 0;
+                                }
+                            });
+                        }
+                    }
                     checkStickerFilesExistAndDownload();
                     delegate.needChangePanelVisibility(stickers != null && !stickers.isEmpty() && stickersToLoad.isEmpty());
                     notifyDataSetChanged();
